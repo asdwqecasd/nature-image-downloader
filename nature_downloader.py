@@ -17,6 +17,7 @@ THEMES = {
 UNSPLASH_API = "https://api.unsplash.com/search/photos"
 # API Key của bạn đã được nhúng sẵn
 UNSPLASH_ACCESS_KEY = "5j-Fcs1cdGIApLE50oSO0YWz-yeIImx5zmNZcxMYPx0"
+MAX_IMAGES = 9999  # Tối đa 9999 ảnh
 
 
 def print_menu():
@@ -34,6 +35,7 @@ def safe_name(text: str) -> str:
 
 
 def fetch_unsplash_images(query: str, count: int):
+    """Lấy URL ảnh từ Unsplash API với hỗ trợ phân trang"""
     if not UNSPLASH_ACCESS_KEY:
         raise RuntimeError(
             "Chưa có API key Unsplash. Hãy chạy:\n"
@@ -41,32 +43,58 @@ def fetch_unsplash_images(query: str, count: int):
             "hoặc set biến môi trường trong Windows."
         )
 
-    headers = {"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"}
-    params = {
-        "query": query,
-        "per_page": min(count, 30),
-        "page": 1,
-        "orientation": "landscape",
-    }
-
-    response = requests.get(UNSPLASH_API, headers=headers, params=params, timeout=30)
-    response.raise_for_status()
-
-    data = response.json()
-    results = data.get("results", [])
-
-    if not results:
-        raise RuntimeError(f"Không tìm thấy ảnh cho từ khóa: {query}")
-
     urls = []
-    for item in results[:count]:
-        url = item.get("urls", {}).get("regular")
-        if url:
-            urls.append(url)
-    return urls
+    headers = {"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"}
+    
+    # Unsplash API tối đa 30 ảnh/lần, nên phải phân trang
+    per_page = 30
+    total_pages = (count + per_page - 1) // per_page
+    
+    print(f"Đang tải từ {total_pages} trang (30 ảnh/trang)...")
+    
+    for page in range(1, total_pages + 1):
+        params = {
+            "query": query,
+            "per_page": per_page,
+            "page": page,
+            "orientation": "landscape",
+        }
+        
+        try:
+            response = requests.get(UNSPLASH_API, headers=headers, params=params, timeout=30)
+            response.raise_for_status()
+        except Exception as e:
+            print(f"[FAIL] Lỗi khi tải trang {page}: {e}")
+            break
+        
+        data = response.json()
+        results = data.get("results", [])
+        
+        if not results:
+            print(f"Trang {page}: Không tìm thấy ảnh nữa")
+            break
+        
+        for item in results:
+            if len(urls) >= count:
+                break
+            url = item.get("urls", {}).get("regular")
+            if url:
+                urls.append(url)
+        
+        print(f"Trang {page}: Đã lấy {len(urls)}/{count} ảnh")
+        time.sleep(0.3)  # Delay nhẹ giữa các request
+        
+        if len(urls) >= count:
+            break
+    
+    if not urls:
+        raise RuntimeError(f"Không tìm thấy ảnh cho từ khóa: {query}")
+    
+    return urls[:count]
 
 
 def download_file(url: str, folder: Path, filename: str):
+    """Tải file ảnh từ URL"""
     response = requests.get(url, timeout=30)
     response.raise_for_status()
     file_path = folder / filename
@@ -85,6 +113,7 @@ def main():
         return
 
     print(f"✓ API Key được tải thành công!")
+    print(f"✓ Tối đa có thể tải: {MAX_IMAGES} ảnh\n")
     
     while True:
         print_menu()
@@ -100,7 +129,7 @@ def main():
 
         topic_name, query = THEMES[choice]
         try:
-            amount = int(input(f"Số lượng ảnh muốn tải cho '{topic_name}': ").strip())
+            amount = int(input(f"Số lượng ảnh muốn tải cho '{topic_name}' (tối đa {MAX_IMAGES}): ").strip())
         except ValueError:
             print("Số lượng phải là số nguyên.")
             continue
@@ -108,6 +137,10 @@ def main():
         if amount <= 0:
             print("Số lượng phải lớn hơn 0.")
             continue
+        
+        if amount > MAX_IMAGES:
+            print(f"Số lượng vượt quá tối đa {MAX_IMAGES}. Sẽ tải {MAX_IMAGES} ảnh.")
+            amount = MAX_IMAGES
 
         folder = Path("downloads") / safe_name(topic_name)
         folder.mkdir(parents=True, exist_ok=True)
@@ -119,18 +152,21 @@ def main():
             print(f"Lỗi khi tìm ảnh: {e}")
             continue
 
+        print(f"\nBắt đầu tải {len(image_urls)} ảnh...")
         downloaded = 0
         for idx, url in enumerate(image_urls, start=1):
             try:
-                filename = f"{safe_name(topic_name)}_{idx}.jpg"
+                filename = f"{safe_name(topic_name)}_{idx:04d}.jpg"  # Format với số 4 chữ số
                 save_path = download_file(url, folder, filename)
-                print(f"[OK] {idx}/{len(image_urls)} -> {save_path}")
+                print(f"[OK] {idx}/{len(image_urls)} -> {filename}")
                 downloaded += 1
-                time.sleep(0.5)
+                time.sleep(0.3)
             except Exception as e:
                 print(f"[FAIL] Không tải được ảnh thứ {idx}: {e}")
 
-        print(f"\nHoàn tất. Đã tải {downloaded}/{amount} ảnh vào: {folder.resolve()}")
+        print(f"\n✓ Hoàn tất. Đã tải {downloaded}/{amount} ảnh vào:")
+        print(f"  {folder.resolve()}")
+        
         again = input("\nBạn muốn tải tiếp? (y/n): ").strip().lower()
         if again not in ("y", "yes"):
             print("Kết thúc.")
